@@ -18,6 +18,7 @@ static uint8_t perm_dist[PERMUTATIONS];
 static uint8_t ori_dist[ORIENTATIONS];
 static uint8_t solution[11];
 static uint64_t ida_nodes;
+static uint64_t ida_pruned_nodes;
 
 typedef struct {
     uint8_t p[CUBIES], o[CUBIES];
@@ -293,15 +294,12 @@ static uint8_t heuristic(uint16_t p, uint16_t o)
 
     return hp > ho ? hp : ho;
 }
+
 static int ida_dfs(uint16_t p, uint16_t o,
                    uint8_t depth, uint8_t bound,
                    int8_t previous_face)
 {
     ++ida_nodes;
-    uint8_t h = heuristic(p, o);
-
-    if ((uint8_t)(depth + h) > bound)
-        return 0;
 
     if (p == 0 && o == 0)
         return 1;
@@ -319,10 +317,21 @@ static int ida_dfs(uint16_t p, uint16_t o,
             uint16_t next_p = perm_move[p][move];
             uint16_t next_o = ori_move[o][move];
 
+            uint8_t next_depth =
+                (uint8_t)(depth + 1);
+
+            uint8_t next_h =
+                heuristic(next_p, next_o);
+
+            if ((uint8_t)(next_depth + next_h) > bound) {
+                ++ida_pruned_nodes;
+                continue;
+            }
+
             solution[depth] = move;
 
             if (ida_dfs(next_p, next_o,
-                        (uint8_t)(depth + 1),
+                        next_depth,
                         bound,
                         (int8_t)face))
                 return 1;
@@ -334,6 +343,7 @@ static int ida_dfs(uint16_t p, uint16_t o,
 static int solve_ida(uint16_t p, uint16_t o, uint8_t *solution_length)
 {
     ida_nodes = 0;
+    ida_pruned_nodes = 0;
     uint8_t bound = heuristic(p, o);
 
     while (bound <= 11) {
@@ -659,6 +669,8 @@ int main(int argc, char **argv)
                (unsigned)bfs_distance);
         printf("IDA* nodes: %llu\n",
                (unsigned long long)ida_nodes);
+        printf("heuristic-pruned nodes: %llu\n",
+       (unsigned long long)ida_pruned_nodes);       
 
         printf("solution:");
 
