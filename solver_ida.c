@@ -19,6 +19,25 @@ static uint8_t ori_dist[ORIENTATIONS];
 static uint8_t solution[11];
 static uint64_t ida_nodes;
 static uint64_t ida_pruned_nodes;
+static uint64_t ida_generated_children;
+static const uint8_t allowed_moves[4][9] = {
+    /* previous face = R */
+    {0x13, 0x14, 0x15, 0x26, 0x27, 0x28, 0, 0, 0},
+
+    /* previous face = B */
+    {0x00, 0x01, 0x02, 0x26, 0x27, 0x28, 0, 0, 0},
+
+    /* previous face = D */
+    {0x00, 0x01, 0x02, 0x13, 0x14, 0x15, 0, 0, 0},
+
+    /* root */
+    {0x00, 0x01, 0x02, 0x13, 0x14, 0x15, 0x26, 0x27, 0x28}
+};
+
+static const uint8_t allowed_count[4] = {
+    6, 6, 6, 9
+};
+
 
 typedef struct {
     uint8_t p[CUBIES], o[CUBIES];
@@ -307,41 +326,47 @@ static int ida_dfs(uint16_t p, uint16_t o,
     if (depth == bound)
         return 0;
 
-    for (uint8_t face = 0; face < 3; ++face) {
-        if ((int8_t)face == previous_face)
+    uint8_t prev_index =
+        previous_face < 0 ? 3 : (uint8_t)previous_face;
+
+    for (uint8_t i = 0; i < allowed_count[prev_index]; ++i) {
+        
+        uint8_t entry = allowed_moves[prev_index][i];
+
+        uint8_t move = (uint8_t)(entry & 0x0F);
+        uint8_t next_face = (uint8_t)(entry >> 4);
+
+        ++ida_generated_children;
+
+        uint16_t next_p = perm_move[p][move];
+        uint16_t next_o = ori_move[o][move];
+
+        uint8_t next_depth =
+            (uint8_t)(depth + 1);
+
+        uint8_t next_h =
+            heuristic(next_p, next_o);
+
+        if ((uint8_t)(next_depth + next_h) > bound) {
+            ++ida_pruned_nodes;
             continue;
-
-        for (uint8_t turn = 0; turn < 3; ++turn) {
-            uint8_t move = (uint8_t)(face * 3 + turn);
-
-            uint16_t next_p = perm_move[p][move];
-            uint16_t next_o = ori_move[o][move];
-
-            uint8_t next_depth =
-                (uint8_t)(depth + 1);
-
-            uint8_t next_h =
-                heuristic(next_p, next_o);
-
-            if ((uint8_t)(next_depth + next_h) > bound) {
-                ++ida_pruned_nodes;
-                continue;
-            }
-
-            solution[depth] = move;
-
-            if (ida_dfs(next_p, next_o,
-                        next_depth,
-                        bound,
-                        (int8_t)face))
-                return 1;
         }
+
+        solution[depth] = move;
+
+    
+        if (ida_dfs(next_p, next_o,
+            next_depth,
+            bound,
+            (int8_t)next_face))
+        return 1;
     }
 
     return 0;
 }
 static int solve_ida(uint16_t p, uint16_t o, uint8_t *solution_length)
 {
+    ida_generated_children = 0;
     ida_nodes = 0;
     ida_pruned_nodes = 0;
     uint8_t bound = heuristic(p, o);
@@ -670,7 +695,9 @@ int main(int argc, char **argv)
         printf("IDA* nodes: %llu\n",
                (unsigned long long)ida_nodes);
         printf("heuristic-pruned nodes: %llu\n",
-       (unsigned long long)ida_pruned_nodes);       
+       (unsigned long long)ida_pruned_nodes);  
+       printf("generated children: %llu\n",
+       (unsigned long long)ida_generated_children);     
 
         printf("solution:");
 
