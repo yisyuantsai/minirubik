@@ -16,6 +16,8 @@ static uint16_t perm_move[PERMUTATIONS][MOVES];
 static uint16_t ori_move[ORIENTATIONS][MOVES];
 static uint8_t perm_dist[PERMUTATIONS];
 static uint8_t ori_dist[ORIENTATIONS];
+static uint8_t perm_dist_packed[(PERMUTATIONS + 1) / 2];
+static uint8_t ori_dist_packed[(ORIENTATIONS + 1) / 2];
 static uint8_t solution[11];
 static uint64_t ida_nodes;
 static uint64_t ida_pruned_nodes;
@@ -37,6 +39,7 @@ static const uint8_t allowed_moves[4][9] = {
 static const uint8_t allowed_count[4] = {
     6, 6, 6, 9
 };
+
 
 
 typedef struct {
@@ -280,6 +283,57 @@ static int build_heuristics(void)
 
     return 1;
 }
+static void pack_heuristics(void)
+{
+    memset(perm_dist_packed, 0, sizeof perm_dist_packed);
+    memset(ori_dist_packed, 0, sizeof ori_dist_packed);
+
+    for (uint16_t p = 0; p < PERMUTATIONS; ++p) {
+        uint16_t byte_index = (uint16_t)(p >> 1);
+
+        if (p & 1)
+            perm_dist_packed[byte_index] |=
+                (uint8_t)(perm_dist[p] << 4);
+        else
+            perm_dist_packed[byte_index] |=
+                (uint8_t)(perm_dist[p] & 0x0F);
+    }
+
+    for (uint16_t o = 0; o < ORIENTATIONS; ++o) {
+        uint16_t byte_index = (uint16_t)(o >> 1);
+
+        if (o & 1)
+            ori_dist_packed[byte_index] |=
+                (uint8_t)(ori_dist[o] << 4);
+        else
+            ori_dist_packed[byte_index] |=
+                (uint8_t)(ori_dist[o] & 0x0F);
+    }
+}
+static uint8_t packed_get(const uint8_t *table, uint16_t index)
+{
+    uint8_t value = table[index >> 1];
+
+    if (index & 1)
+        return (uint8_t)(value >> 4);
+
+    return (uint8_t)(value & 0x0F);
+}
+static int validate_packed_heuristics(void)
+{
+    for (uint16_t p = 0; p < PERMUTATIONS; ++p) {
+        if (packed_get(perm_dist_packed, p) != perm_dist[p])
+            return 0;
+    }
+
+    for (uint16_t o = 0; o < ORIENTATIONS; ++o) {
+        if (packed_get(ori_dist_packed, o) != ori_dist[o])
+            return 0;
+    }
+
+    return 1;
+}
+
 static int validate_heuristics(uint8_t *perm_max, uint8_t *ori_max)
 {
     *perm_max = 0;
@@ -630,6 +684,30 @@ int main(int argc, char **argv)
 
         return output_failed();
     }
+    if (argc == 2 && !strcmp(argv[1], "--packed-test")) {
+    build_transitions();
+
+    if (!build_heuristics()) {
+        fputs("could not build heuristic tables\n", stderr);
+        return 1;
+    }
+
+    pack_heuristics();
+
+    if (!validate_packed_heuristics()) {
+        fputs("packed heuristic validation failed\n", stderr);
+        return 1;
+    }
+
+    printf("packed heuristic validation OK\n");
+    printf("unpacked heuristic bytes: %u\n",
+           (unsigned)(PERMUTATIONS + ORIENTATIONS));
+    printf("packed heuristic bytes: %u\n",
+           (unsigned)(sizeof perm_dist_packed +
+                      sizeof ori_dist_packed));
+
+    return output_failed();
+}
 
     if (argc == 3 && !strcmp(argv[1], "--ida-test")) {
         if (!parse_state(argv[2], &state)) {
