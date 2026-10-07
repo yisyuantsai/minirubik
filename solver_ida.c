@@ -377,8 +377,8 @@ static int ida_dfs(uint16_t p, uint16_t o,
     if (p == 0 && o == 0)
         return 1;
 
-    if (depth == bound)
-        return 0;
+    
+    
 
     uint8_t prev_index =
         previous_face < 0 ? 3 : (uint8_t)previous_face;
@@ -420,6 +420,7 @@ static int ida_dfs(uint16_t p, uint16_t o,
 }
 static int solve_ida(uint16_t p, uint16_t o, uint8_t *solution_length)
 {
+    
     ida_generated_children = 0;
     ida_nodes = 0;
     ida_pruned_nodes = 0;
@@ -773,10 +774,9 @@ int main(int argc, char **argv)
         printf("IDA* nodes: %llu\n",
                (unsigned long long)ida_nodes);
         printf("heuristic-pruned nodes: %llu\n",
-       (unsigned long long)ida_pruned_nodes);  
-       printf("generated children: %llu\n",
-       (unsigned long long)ida_generated_children);     
-
+               (unsigned long long)ida_pruned_nodes);  
+        printf("generated children: %llu\n",
+               (unsigned long long)ida_generated_children);     
         printf("solution:");
 
         for (uint8_t i = 0; i < solution_length; ++i) {
