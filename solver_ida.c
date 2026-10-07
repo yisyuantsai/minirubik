@@ -11,8 +11,9 @@ enum {
     STATES = PERMUTATIONS * ORIENTATIONS,
     MOVES = 9
 };
-static uint16_t perm_move[MOVES][PERMUTATIONS];
-static uint16_t ori_move[MOVES][ORIENTATIONS];
+
+static uint16_t perm_move[PERMUTATIONS][MOVES];
+static uint16_t ori_move[ORIENTATIONS][MOVES];
 static uint8_t perm_dist[PERMUTATIONS];
 static uint8_t ori_dist[ORIENTATIONS];
 static uint8_t solution[11];
@@ -159,7 +160,7 @@ static void build_transitions(void)
 
         for (uint8_t move = 0; move < MOVES; ++move) {
             state_t next = apply_move(state, move);
-            perm_move[move][p] =
+            perm_move[p][move] =
                 (uint16_t)(rank_state(&next) / ORIENTATIONS);
         }
     }
@@ -170,7 +171,7 @@ static void build_transitions(void)
 
         for (uint8_t move = 0; move < MOVES; ++move) {
             state_t next = apply_move(state, move);
-            ori_move[move][o] =
+            ori_move[o][move] =
                 (uint16_t)(rank_state(&next) % ORIENTATIONS);
         }
     }
@@ -194,8 +195,8 @@ static int validate_transitions(void)
             uint16_t expected_o =
                 (uint16_t)(next_rank % ORIENTATIONS);
 
-            if (perm_move[move][p] != expected_p ||
-                ori_move[move][o] != expected_o)
+            if (perm_move[p][move] != expected_p ||
+                ori_move[o][move] != expected_o)
                 return 0;
         }
     }
@@ -220,7 +221,7 @@ static int build_heuristics(void)
         uint16_t p = queue[head++];
 
         for (uint8_t move = 0; move < MOVES; ++move) {
-            uint16_t next = perm_move[move][p];
+            uint16_t next = perm_move[p][move];
 
             if (perm_dist[next] == 0xFF) {
                 perm_dist[next] = (uint8_t)(perm_dist[p] + 1);
@@ -245,7 +246,7 @@ static int build_heuristics(void)
         uint16_t o = queue[head++];
 
         for (uint8_t move = 0; move < MOVES; ++move) {
-            uint16_t next = ori_move[move][o];
+            uint16_t next = ori_move[o][move];
 
             if (ori_dist[next] == 0xFF) {
                 ori_dist[next] = (uint8_t)(ori_dist[o] + 1);
@@ -315,8 +316,8 @@ static int ida_dfs(uint16_t p, uint16_t o,
         for (uint8_t turn = 0; turn < 3; ++turn) {
             uint8_t move = (uint8_t)(face * 3 + turn);
 
-            uint16_t next_p = perm_move[move][p];
-            uint16_t next_o = ori_move[move][o];
+            uint16_t next_p = perm_move[p][move];
+            uint16_t next_o = ori_move[o][move];
 
             solution[depth] = move;
 
@@ -371,8 +372,8 @@ static uint8_t exact_distance_rank(uint32_t rank, const uint8_t *table)
         uint16_t p = (uint16_t)(rank / ORIENTATIONS);
         uint16_t o = (uint16_t)(rank % ORIENTATIONS);
 
-        p = perm_move[move][p];
-        o = ori_move[move][o];
+        p = perm_move[p][move];
+        o = ori_move[o][move];
 
         rank = (uint32_t)p * ORIENTATIONS + o;
         ++distance;
