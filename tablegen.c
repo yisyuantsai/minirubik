@@ -12,7 +12,11 @@ enum {
     MOVES = 9
 };
 
-#include "tables_generated.h"
+
+static uint16_t perm_move[PERMUTATIONS][MOVES];
+static uint16_t ori_move[ORIENTATIONS][MOVES];
+static uint8_t perm_dist[PERMUTATIONS];
+static uint8_t ori_dist[ORIENTATIONS];
 static uint8_t perm_dist_packed[(PERMUTATIONS + 1) / 2];
 static uint8_t ori_dist_packed[(ORIENTATIONS + 1) / 2];
 static uint8_t solution[11];
@@ -48,7 +52,6 @@ typedef struct {
     uint8_t prev_index;
     uint8_t next_i;
 } ida_frame_t;
-
 static ida_frame_t ida_stack[IDA_MAX_DEPTH + 1];
 /*@ predicate valid_state(state_t *state) =
       (\forall integer i; 0 <= i < CUBIES ==>
@@ -177,7 +180,32 @@ static void unrank_state(uint32_t rank, state_t *state)
     }
     state->o[6] = (uint8_t) ((3U - sum % 3U) % 3U);
 }
+static void build_transitions(void)
+{
+    state_t state;
 
+    /* Build permutation transitions. */
+    for (uint16_t p = 0; p < PERMUTATIONS; ++p) {
+        unrank_state((uint32_t)p * ORIENTATIONS, &state);
+
+        for (uint8_t move = 0; move < MOVES; ++move) {
+            state_t next = apply_move(state, move);
+            perm_move[p][move] =
+                (uint16_t)(rank_state(&next) / ORIENTATIONS);
+        }
+    }
+
+    /* Build orientation transitions. */
+    for (uint16_t o = 0; o < ORIENTATIONS; ++o) {
+        unrank_state(o, &state);
+
+        for (uint8_t move = 0; move < MOVES; ++move) {
+            state_t next = apply_move(state, move);
+            ori_move[o][move] =
+                (uint16_t)(rank_state(&next) % ORIENTATIONS);
+        }
+    }
+}
 static int validate_transitions(void)
 {
     state_t state;
@@ -205,7 +233,149 @@ static int validate_transitions(void)
 
     return 1;
 }
+static int build_heuristics(void)
+{
+    uint16_t queue[PERMUTATIONS];
+    uint16_t head, tail;
 
+    /* Permutation heuristic. */
+    memset(perm_dist, 0xFF, sizeof perm_dist);
+
+    head = 0;
+    tail = 0;
+
+    perm_dist[0] = 0;
+    queue[tail++] = 0;
+
+    while (head < tail) {
+        uint16_t p = queue[head++];
+
+        for (uint8_t move = 0; move < MOVES; ++move) {
+            uint16_t next = perm_move[p][move];
+
+            if (perm_dist[next] == 0xFF) {
+                perm_dist[next] = (uint8_t)(perm_dist[p] + 1);
+                queue[tail++] = next;
+            }
+        }
+    }
+
+    if (tail != PERMUTATIONS)
+        return 0;
+
+    /* Orientation heuristic. */
+    memset(ori_dist, 0xFF, sizeof ori_dist);
+
+    head = 0;
+    tail = 0;
+
+    ori_dist[0] = 0;
+    queue[tail++] = 0;
+
+    while (head < tail) {
+        uint16_t o = queue[head++];
+
+        for (uint8_t move = 0; move < MOVES; ++move) {
+            uint16_t next = ori_move[o][move];
+
+            if (ori_dist[next] == 0xFF) {
+                ori_dist[next] = (uint8_t)(ori_dist[o] + 1);
+                queue[tail++] = next;
+            }
+        }
+    }
+
+    if (tail != ORIENTATIONS)
+        return 0;
+
+    return 1;
+}
+static int dump_tables(const char *path)
+{
+    FILE *f = fopen(path, "w");
+
+    if (!f)
+        return 0;
+
+    fprintf(f,
+            "/* Generated file. Do not edit manually. */\n\n");
+
+    fprintf(f,
+            "static const uint16_t "
+            "perm_move[PERMUTATIONS][MOVES] = {\n");
+
+    for (uint16_t p = 0; p < PERMUTATIONS; ++p) {
+        fprintf(f, "    {");
+
+        for (uint8_t move = 0; move < MOVES; ++move) {
+            fprintf(f, "%u",
+                    (unsigned)perm_move[p][move]);
+
+            if (move + 1 != MOVES)
+                fprintf(f, ", ");
+        }
+
+        fprintf(f, "},\n");
+    }
+
+    fprintf(f, "};\n\n");
+
+    fprintf(f,
+            "static const uint16_t "
+            "ori_move[ORIENTATIONS][MOVES] = {\n");
+
+    for (uint16_t o = 0; o < ORIENTATIONS; ++o) {
+        fprintf(f, "    {");
+
+        for (uint8_t move = 0; move < MOVES; ++move) {
+            fprintf(f, "%u",
+                    (unsigned)ori_move[o][move]);
+
+            if (move + 1 != MOVES)
+                fprintf(f, ", ");
+        }
+
+        fprintf(f, "},\n");
+    }
+
+    fprintf(f, "};\n\n");
+
+    fprintf(f,
+            "static const uint8_t "
+            "perm_dist[PERMUTATIONS] = {\n    ");
+
+    for (uint16_t p = 0; p < PERMUTATIONS; ++p) {
+        fprintf(f, "%u", (unsigned)perm_dist[p]);
+
+        if (p + 1 != PERMUTATIONS)
+            fprintf(f, ", ");
+
+        if ((p + 1) % 16 == 0 &&
+            p + 1 != PERMUTATIONS)
+            fprintf(f, "\n    ");
+    }
+
+    fprintf(f, "\n};\n\n");
+
+    fprintf(f,
+            "static const uint8_t "
+            "ori_dist[ORIENTATIONS] = {\n    ");
+
+    for (uint16_t o = 0; o < ORIENTATIONS; ++o) {
+        fprintf(f, "%u", (unsigned)ori_dist[o]);
+
+        if (o + 1 != ORIENTATIONS)
+            fprintf(f, ", ");
+
+        if ((o + 1) % 16 == 0 &&
+            o + 1 != ORIENTATIONS)
+            fprintf(f, "\n    ");
+    }
+
+    fprintf(f, "\n};\n");
+
+    return fclose(f) == 0;
+}
 static void pack_heuristics(void)
 {
     memset(perm_dist_packed, 0, sizeof perm_dist_packed);
@@ -594,7 +764,7 @@ int main(int argc, char **argv)
     uint8_t diameter;
 
     if (argc == 2 && !strcmp(argv[1], "--transition-test")) {
-        
+        build_transitions();
 
         if (!validate_transitions()) {
             fputs("transition table validation failed\n", stderr);
@@ -605,9 +775,32 @@ int main(int argc, char **argv)
         return output_failed();
     }
 
+    if (argc == 3 && !strcmp(argv[1], "--dump-tables")) {
+        build_transitions();
+
+        if (!build_heuristics()) {
+            fputs("could not build heuristic tables\n", stderr);
+            return 1;
+        }
+
+        if (!dump_tables(argv[2])) {
+            fputs("could not write table file\n", stderr);
+            return 1;
+        }
+
+        puts("precomputed tables written");
+        return 0;
+    }
 
     if (argc == 2 && !strcmp(argv[1], "--heuristic-test")) {
         uint8_t perm_max, ori_max;
+
+        build_transitions();
+
+        if (!build_heuristics()) {
+            fputs("could not build heuristic tables\n", stderr);
+            return 1;
+        }
 
         if (!validate_heuristics(&perm_max, &ori_max)) {
             fputs("heuristic table validation failed\n", stderr);
@@ -624,6 +817,12 @@ int main(int argc, char **argv)
     }
 
     if (argc == 2 && !strcmp(argv[1], "--packed-test")) {
+        build_transitions();
+
+        if (!build_heuristics()) {
+            fputs("could not build heuristic tables\n", stderr);
+            return 1;
+        }
 
         pack_heuristics();
 
@@ -648,7 +847,12 @@ int main(int argc, char **argv)
             return 2;
         }
 
-    
+        build_transitions();
+
+        if (!build_heuristics()) {
+            fputs("could not build heuristic tables\n", stderr);
+            return 1;
+        }
 
         uint32_t rank = rank_state(&state);
 
@@ -727,7 +931,13 @@ int main(int argc, char **argv)
     }
 
     if (argc == 2 && !strcmp(argv[1], "--admissibility-test")) {
-        
+        build_transitions();
+
+        if (!build_heuristics()) {
+            fputs("could not build heuristic tables\n", stderr);
+            return 1;
+        }
+
         uint8_t *table = build_table(&diameter);
 
         if (!table) {
@@ -765,7 +975,12 @@ int main(int argc, char **argv)
     }
 
     if (argc == 2 && !strcmp(argv[1], "--optimality-test")) {
-        
+        build_transitions();
+
+        if (!build_heuristics()) {
+            fputs("could not build heuristic tables\n", stderr);
+            return 1;
+        }
 
         uint8_t *table = build_table(&diameter);
 
@@ -833,7 +1048,12 @@ int main(int argc, char **argv)
     }
 
     if (argc == 2 && !strcmp(argv[1], "--depth11-stats")) {
-       
+        build_transitions();
+
+        if (!build_heuristics()) {
+            fputs("could not build heuristic tables\n", stderr);
+            return 1;
+        }
 
         uint8_t *table = build_table(&diameter);
 
