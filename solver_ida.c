@@ -3,7 +3,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
-
+#define IDA_MAX_DEPTH 11
 enum {
     CUBIES = 7,
     PERMUTATIONS = 5040,
@@ -11,6 +11,7 @@ enum {
     STATES = PERMUTATIONS * ORIENTATIONS,
     MOVES = 9
 };
+
 
 static uint16_t perm_move[PERMUTATIONS][MOVES];
 static uint16_t ori_move[ORIENTATIONS][MOVES];
@@ -41,11 +42,17 @@ static const uint8_t allowed_count[4] = {
 };
 
 
-
 typedef struct {
     uint8_t p[CUBIES], o[CUBIES];
 } state_t;
 
+typedef struct {
+    uint16_t p;
+    uint16_t o;
+    uint8_t prev_index;
+    uint8_t next_i;
+} ida_frame_t;
+static ida_frame_t ida_stack[IDA_MAX_DEPTH + 1];
 /*@ predicate valid_state(state_t *state) =
       (\forall integer i; 0 <= i < CUBIES ==>
          state->p[i] < CUBIES && state->o[i] < 3) &&
@@ -368,35 +375,52 @@ static uint8_t heuristic(uint16_t p, uint16_t o)
     return hp > ho ? hp : ho;
 }
 
-static int ida_dfs(uint16_t p, uint16_t o,
-                   uint8_t depth, uint8_t bound,
-                   int8_t previous_face)
+static int ida_search_bound(uint16_t root_p,
+                                      uint16_t root_o,
+                                      uint8_t bound)
 {
+    uint8_t sp = 0;
+
+    ida_stack[0].p = root_p;
+    ida_stack[0].o = root_o;
+    ida_stack[0].prev_index = 3;
+    ida_stack[0].next_i = 0;
+
     ++ida_nodes;
 
-    if (p == 0 && o == 0)
-        return 1;
+    for (;;) {
+        ida_frame_t *frame = &ida_stack[sp];
 
-    
-    
+        if (frame->p == 0 && frame->o == 0)
+            return 1;
 
-    uint8_t prev_index =
-        previous_face < 0 ? 3 : (uint8_t)previous_face;
+        if (frame->next_i >= allowed_count[frame->prev_index]) {
+            if (sp == 0)
+                return 0;
 
-    for (uint8_t i = 0; i < allowed_count[prev_index]; ++i) {
-        
-        uint8_t entry = allowed_moves[prev_index][i];
+            --sp;
+            continue;
+        }
 
-        uint8_t move = (uint8_t)(entry & 0x0F);
-        uint8_t next_face = (uint8_t)(entry >> 4);
+        uint8_t entry =
+            allowed_moves[frame->prev_index][frame->next_i++];
+
+        uint8_t move =
+            (uint8_t)(entry & 0x0F);
+
+        uint8_t next_face =
+            (uint8_t)(entry >> 4);
 
         ++ida_generated_children;
 
-        uint16_t next_p = perm_move[p][move];
-        uint16_t next_o = ori_move[o][move];
+        uint16_t next_p =
+            perm_move[frame->p][move];
+
+        uint16_t next_o =
+            ori_move[frame->o][move];
 
         uint8_t next_depth =
-            (uint8_t)(depth + 1);
+            (uint8_t)(sp + 1);
 
         uint8_t next_h =
             heuristic(next_p, next_o);
@@ -406,28 +430,31 @@ static int ida_dfs(uint16_t p, uint16_t o,
             continue;
         }
 
-        solution[depth] = move;
+        solution[sp] = move;
 
-    
-        if (ida_dfs(next_p, next_o,
-            next_depth,
-            bound,
-            (int8_t)next_face))
-        return 1;
+        ++sp;
+
+        ida_stack[sp].p = next_p;
+        ida_stack[sp].o = next_o;
+        ida_stack[sp].prev_index = next_face;
+        ida_stack[sp].next_i = 0;
+
+        ++ida_nodes;
     }
-
-    return 0;
 }
-static int solve_ida(uint16_t p, uint16_t o, uint8_t *solution_length)
+
+static int solve_ida(uint16_t p,
+                               uint16_t o,
+                               uint8_t *solution_length)
 {
-    
     ida_generated_children = 0;
     ida_nodes = 0;
     ida_pruned_nodes = 0;
+
     uint8_t bound = heuristic(p, o);
 
-    while (bound <= 11) {
-        if (ida_dfs(p, o, 0, bound, -1)) {
+    while (bound <= IDA_MAX_DEPTH) {
+        if (ida_search_bound(p, o, bound)) {
             *solution_length = bound;
             return 1;
         }
@@ -732,7 +759,6 @@ int main(int argc, char **argv)
             (uint16_t)(rank % ORIENTATIONS);
 
         uint8_t solution_length;
-
         if (!solve_ida(p, o, &solution_length)) {
             fputs("IDA* failed to find a solution\n", stderr);
             return 1;
