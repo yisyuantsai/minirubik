@@ -131,10 +131,9 @@ input_invalid:
     li      a3, 0
     li      a4, 0
 
-
 validation_done:
-    # Temporary Stage 4.6 Ripes inspection loop.
-    j       validation_done
+    li      a7, 10
+    ecall    
 
 
 # ===========================================================================
