@@ -9,17 +9,63 @@
     #   +5 : uint8_t  next_i
     .equ FRAME_SIZE,     6
 
+
+# ===========================================================================
+# Text section
+# ===========================================================================
+
     .section .text
     .globl _start
+
+
+# ---------------------------------------------------------------------------
+# _start
+#
+# Current Stage 4.4 test flow:
+#
+#   input_state
+#       |
+#       v
+#   parse_and_rank
+#       |
+#       | a0 = p
+#       | a1 = o
+#       v
+#   heuristic_lookup
+#       |
+#       | a2 = h(p,o)
+#       v
+#   heuristic_done
+#
+# The final self-loop is temporary and allows the registers to be inspected
+# in Ripes.
+# ---------------------------------------------------------------------------
 
 _start:
     jal     ra, parse_and_rank
 
-parse_done:
-    j       parse_done
+    # Invalid input?
+    li      t0, -1
+    beq     a0, t0, input_invalid
+
+    # Input:
+    #   a0 = permutation rank p
+    #   a1 = orientation rank o
+    #
+    # Output:
+    #   a2 = heuristic h(p,o)
+    jal     ra, heuristic_lookup
+
+heuristic_done:
+    j       heuristic_done
 
 
-# ---------------------------------------------------------------------------
+input_invalid:
+    li      a2, -1
+    j       heuristic_done
+
+
+# ===========================================================================
 # parse_and_rank
 #
 # Output:
@@ -29,7 +75,7 @@ parse_done:
 # Invalid input:
 #   a0 = -1
 #   a1 = 0
-# ---------------------------------------------------------------------------
+# ===========================================================================
 
 parse_and_rank:
 
@@ -48,13 +94,14 @@ parse_and_rank:
     li      t2, 0                  # i
     li      t5, 0                  # used-value bit mask
 
+
 parse_perm_loop:
     li      t6, CUBIES
     bgeu    t2, t6, parse_ori_begin
 
     lbu     t3, 0(t0)
 
-    # Convert '1'..'7' to 0..6.
+    # Convert ASCII '1'..'7' to 0..6.
     addi    t3, t3, -49
 
     li      t4, 7
@@ -68,8 +115,10 @@ parse_perm_loop:
     and     t4, t5, t6
     bnez    t4, parse_invalid
 
+    # Mark value as used.
     or      t5, t5, t6
 
+    # Save parsed permutation value.
     sb      t3, 0(t1)
 
     addi    t0, t0, 1
@@ -80,13 +129,13 @@ parse_perm_loop:
 
 
     # -----------------------------------------------------------------------
-    # Parse orientations.
+    # Parse orientation digits.
     #
     # a1 = base-3 orientation rank
     # t5 = orientation sum modulo 3
     #
     # Only the first six orientations are included in the rank because the
-    # seventh is determined by the corner-twist invariant.
+    # seventh orientation is determined by the corner-twist invariant.
     # -----------------------------------------------------------------------
 
 parse_ori_begin:
@@ -94,19 +143,27 @@ parse_ori_begin:
     li      t5, 0                  # orientation sum modulo 3
     li      a1, 0                  # orientation rank
 
+
 parse_ori_loop:
     li      t6, CUBIES
     bgeu    t2, t6, parse_ori_done
 
     lbu     t3, 0(t0)
 
-    # Convert '1'..'3' to 0..2.
+    # Convert ASCII '1'..'3' to 0..2.
     addi    t3, t3, -49
 
     li      t4, 3
     bgeu    t3, t4, parse_invalid
 
+    # ---------------------------------------------------------------
     # sum_mod3 += orientation
+    #
+    # Previous value is in [0,2], and orientation is in [0,2].
+    # Therefore the sum is at most 4, so at most one subtraction of
+    # 3 is necessary.
+    # ---------------------------------------------------------------
+
     add     t5, t5, t3
 
     li      t4, 3
@@ -114,17 +171,23 @@ parse_ori_loop:
 
     addi    t5, t5, -3
 
+
 ori_sum_ok:
 
-    # The seventh orientation is not stored in the rank.
+    # The seventh orientation is not included in the base-3 rank.
     li      t4, 6
     bgeu    t2, t4, ori_skip_rank
 
+    # ---------------------------------------------------------------
     # a1 = a1 * 3 + digit
-    #    = (a1 << 1) + a1 + digit
+    #
+    # x * 3 = (x << 1) + x
+    # ---------------------------------------------------------------
+
     slli    t4, a1, 1
     add     a1, t4, a1
     add     a1, a1, t3
+
 
 ori_skip_rank:
     addi    t0, t0, 1
@@ -144,7 +207,7 @@ parse_ori_done:
 
 
     # -----------------------------------------------------------------------
-    # Rank permutation with Lehmer code.
+    # Rank permutation using Lehmer code.
     #
     # Mixed-radix construction:
     #
@@ -155,7 +218,7 @@ parse_ori_done:
     #   previous * 3 + d4
     #   previous * 2 + d5
     #
-    # Constant multiplication is implemented using shifts and additions.
+    # All constant multiplications use RV32I shifts and additions.
     # -----------------------------------------------------------------------
 
     la      t0, state_p
@@ -163,28 +226,34 @@ parse_ori_done:
     li      t2, 0                  # i
     li      a0, 0                  # permutation rank
 
+
 rank_perm_outer:
 
-    # Only digits 0..5 are needed.
+    # Only Lehmer digits d0..d5 are needed.
+    # The final digit d6 is always zero.
     li      t6, 6
     bgeu    t2, t6, parse_success
 
     lbu     t3, 0(t0)              # current permutation value
 
-    addi    t1, t0, 1              # scan pointer
+    addi    t1, t0, 1              # pointer to entries on the right
     li      t4, 0                  # smaller = 0
 
     # Number of entries to the right = 6 - i.
     li      t5, 6
     sub     t5, t5, t2
 
+
 rank_perm_inner:
     beqz    t5, rank_digit_done
 
     lbu     t6, 0(t1)
 
+    # If right value < current value:
+    #     ++smaller
     bgeu    t6, t3, rank_not_smaller
     addi    t4, t4, 1
+
 
 rank_not_smaller:
     addi    t1, t1, 1
@@ -223,6 +292,7 @@ rank_digit_done:
     # p = p * 2 + d5
     slli    a0, a0, 1
     add     a0, a0, t4
+
     j       rank_next_digit
 
 
@@ -237,6 +307,7 @@ rank_mul6:
     slli    t6, a0, 1
     add     a0, t5, t6
     add     a0, a0, t4
+
     j       rank_next_digit
 
 
@@ -245,12 +316,15 @@ rank_mul5:
     slli    t5, a0, 2
     add     a0, t5, a0
     add     a0, a0, t4
+
     j       rank_next_digit
 
 
 rank_mul4:
+    # p * 4 = p << 2
     slli    a0, a0, 2
     add     a0, a0, t4
+
     j       rank_next_digit
 
 
@@ -275,51 +349,153 @@ parse_success:
 parse_invalid:
     li      a0, -1
     li      a1, 0
-    ret    
+    ret
 
 
-    # ------------------------------------------------------------------------
-    # Read-only target data
-    # ------------------------------------------------------------------------
+# ===========================================================================
+# heuristic_lookup
+#
+# Input:
+#   a0 = permutation rank p
+#   a1 = orientation rank o
+#
+# Output:
+#   a2 = max(perm_dist[p], ori_dist[o])
+#
+# Preserves:
+#   a0 = p
+#   a1 = o
+#
+# Since each heuristic entry occupies one byte, table indexing only requires
+# base + index. No multiplication is required.
+# ===========================================================================
+
+heuristic_lookup:
+
+    # hp = perm_dist[p]
+    la      t0, perm_dist
+    add     t0, t0, a0
+    lbu     t1, 0(t0)
+
+    # ho = ori_dist[o]
+    la      t2, ori_dist
+    add     t2, t2, a1
+    lbu     t3, 0(t2)
+
+    # h = max(hp, ho)
+    bgeu    t1, t3, heuristic_use_perm
+
+    # ho > hp
+    mv      a2, t3
+    ret
+
+
+heuristic_use_perm:
+    mv      a2, t1
+    ret
+
+
+# ===========================================================================
+# Read-only target data
+# ===========================================================================
 
     .section .rodata
+
+
+# ---------------------------------------------------------------------------
+# Inlined 14-character cube state
+# ---------------------------------------------------------------------------
 
 input_state:
     .asciz "21345671111111"
 
+
+# ---------------------------------------------------------------------------
+# Allowed moves
+#
+# Packed entry:
+#
+#   high nibble = next face
+#   low nibble  = move index
+#
+# Previous-face indices:
+#
+#   0 = R
+#   1 = B
+#   2 = D
+#   3 = root
+# ---------------------------------------------------------------------------
+
 allowed_moves:
+
     # previous face = R
-    .byte 0x13, 0x14, 0x15, 0x26, 0x27, 0x28, 0, 0, 0
+    .byte 0x13, 0x14, 0x15
+    .byte 0x26, 0x27, 0x28
+    .byte 0, 0, 0
 
     # previous face = B
-    .byte 0x00, 0x01, 0x02, 0x26, 0x27, 0x28, 0, 0, 0
+    .byte 0x00, 0x01, 0x02
+    .byte 0x26, 0x27, 0x28
+    .byte 0, 0, 0
 
     # previous face = D
-    .byte 0x00, 0x01, 0x02, 0x13, 0x14, 0x15, 0, 0, 0
+    .byte 0x00, 0x01, 0x02
+    .byte 0x13, 0x14, 0x15
+    .byte 0, 0, 0
 
     # root
-    .byte 0x00, 0x01, 0x02, 0x13, 0x14, 0x15, 0x26, 0x27, 0x28
+    .byte 0x00, 0x01, 0x02
+    .byte 0x13, 0x14, 0x15
+    .byte 0x26, 0x27, 0x28
+
 
 allowed_count:
     .byte 6, 6, 6, 9
 
 
-    # Host-precomputed transition and heuristic tables
+# ---------------------------------------------------------------------------
+# Host-precomputed transition and heuristic tables
+# ---------------------------------------------------------------------------
+
     .include "tables_generated.inc"
 
 
-    # ------------------------------------------------------------------------
-    # Writable target data
-    # ------------------------------------------------------------------------
+# ===========================================================================
+# Writable target data
+# ===========================================================================
 
     .section .bss
     .balign 2
 
+
+# ---------------------------------------------------------------------------
+# Explicit IDA* stack
+#
+# 12 frames:
+#   depth 0 through depth 11
+#
+# 12 * 6 = 72 bytes
+# ---------------------------------------------------------------------------
+
 ida_stack:
     .space (IDA_MAX_DEPTH + 1) * FRAME_SIZE
 
+
+# ---------------------------------------------------------------------------
+# Optimal solution moves
+#
+# Maximum solution length = 11
+# ---------------------------------------------------------------------------
+
 solution:
     .space IDA_MAX_DEPTH
+
+
+# ---------------------------------------------------------------------------
+# Parsed permutation
+#
+# Seven bytes, values 0..6
+# ---------------------------------------------------------------------------
 
 state_p:
     .space CUBIES
