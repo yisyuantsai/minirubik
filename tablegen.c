@@ -376,6 +376,103 @@ static int dump_tables(const char *path)
 
     return fclose(f) == 0;
 }
+static int dump_asm_tables(const char *path)
+{
+    FILE *f = fopen(path, "w");
+
+    if (!f)
+        return 0;
+
+    fprintf(f,
+            "    # Generated file. Do not edit manually.\n"
+            "    .section .rodata\n\n");
+
+    /* permutation transitions */
+    fprintf(f, "    .balign 2\n");
+    fprintf(f, "perm_move:\n");
+
+    for (uint16_t p = 0; p < PERMUTATIONS; ++p) {
+        fprintf(f, "    .half ");
+
+        for (uint8_t move = 0; move < MOVES; ++move) {
+            fprintf(f, "%u",
+                    (unsigned)perm_move[p][move]);
+
+            if (move + 1 != MOVES)
+                fprintf(f, ", ");
+        }
+
+        fprintf(f, "\n");
+    }
+
+    fprintf(f, "\n");
+
+    /* orientation transitions */
+    fprintf(f, "    .balign 2\n");
+    fprintf(f, "ori_move:\n");
+
+    for (uint16_t o = 0; o < ORIENTATIONS; ++o) {
+        fprintf(f, "    .half ");
+
+        for (uint8_t move = 0; move < MOVES; ++move) {
+            fprintf(f, "%u",
+                    (unsigned)ori_move[o][move]);
+
+            if (move + 1 != MOVES)
+                fprintf(f, ", ");
+        }
+
+        fprintf(f, "\n");
+    }
+
+    fprintf(f, "\n");
+
+    /* permutation heuristic */
+    fprintf(f, "perm_dist:\n");
+
+    for (uint16_t p = 0; p < PERMUTATIONS; p += 16) {
+        fprintf(f, "    .byte ");
+
+        uint16_t end = (uint16_t)(p + 16);
+
+        if (end > PERMUTATIONS)
+            end = PERMUTATIONS;
+
+        for (uint16_t i = p; i < end; ++i) {
+            fprintf(f, "%u", (unsigned)perm_dist[i]);
+
+            if (i + 1 != end)
+                fprintf(f, ", ");
+        }
+
+        fprintf(f, "\n");
+    }
+
+    fprintf(f, "\n");
+
+    /* orientation heuristic */
+    fprintf(f, "ori_dist:\n");
+
+    for (uint16_t o = 0; o < ORIENTATIONS; o += 16) {
+        fprintf(f, "    .byte ");
+
+        uint16_t end = (uint16_t)(o + 16);
+
+        if (end > ORIENTATIONS)
+            end = ORIENTATIONS;
+
+        for (uint16_t i = o; i < end; ++i) {
+            fprintf(f, "%u", (unsigned)ori_dist[i]);
+
+            if (i + 1 != end)
+                fprintf(f, ", ");
+        }
+
+        fprintf(f, "\n");
+    }
+
+    return fclose(f) == 0;
+}
 static void pack_heuristics(void)
 {
     memset(perm_dist_packed, 0, sizeof perm_dist_packed);
@@ -789,6 +886,22 @@ int main(int argc, char **argv)
         }
 
         puts("precomputed tables written");
+        return 0;
+    }
+    if (argc == 3 && !strcmp(argv[1], "--dump-asm")) {
+        build_transitions();
+
+        if (!build_heuristics()) {
+            fputs("could not build heuristic tables\n", stderr);
+            return 1;
+        }
+
+        if (!dump_asm_tables(argv[2])) {
+            fputs("could not write assembly table file\n", stderr);
+            return 1;
+        }
+
+        puts("assembly tables written");
         return 0;
     }
 
