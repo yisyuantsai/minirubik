@@ -23,52 +23,118 @@
 # ---------------------------------------------------------------------------
 # _start
 #
-# Stage 4.5 flow:
+# Stage 4.6 flow:
 #
 #   input_state
 #       |
 #       v
 #   parse_and_rank
 #       |
-#       | a0 = p
-#       | a1 = o
+#       | p, o
 #       v
 #   solve_ida
 #       |
-#       | a0 = success
-#       | a1 = optimal solution length
+#       | solution[]
+#       | optimal length
 #       v
-#   solve_done
+#   validate_solution
+#       |
+#       | replay every returned move
+#       v
+#   verify final (p,o) == (0,0)
 #
-# solve_done is temporarily a self-loop so the result can be inspected
-# in Ripes.
+# Final temporary debug registers:
+#
+#   a0 = 1 if search + validation succeeded
+#   a1 = solution length
+#   a2 = 1 if returned path solves the cube
+#   a3 = final permutation rank
+#   a4 = final orientation rank
 # ---------------------------------------------------------------------------
 
 _start:
+    # Parse and rank the inlined input.
     jal     ra, parse_and_rank
 
     # Invalid input?
     li      t0, -1
-    beq     a0, t0, solve_invalid
+    beq     a0, t0, input_invalid
 
-    # Input:
-    #   a0 = root permutation rank
-    #   a1 = root orientation rank
+    # solve_ida input:
+    #   a0 = root p
+    #   a1 = root o
     #
-    # Output:
+    # solve_ida output:
     #   a0 = 1 on success
     #   a1 = optimal solution length
     jal     ra, solve_ida
 
+    # Search failed?
+    beqz    a0, solve_failed
 
-solve_done:
-    j       solve_done
+    # Save solution length.
+    mv      s0, a1
+
+    # s10 / s11 still hold the original root state.
+    #
+    # validate_solution input:
+    #   a0 = root p
+    #   a1 = root o
+    #   a2 = solution length
+    mv      a0, s10
+    mv      a1, s11
+    mv      a2, s0
+
+    jal     ra, validate_solution
+
+    # Save final replayed state for Ripes inspection.
+    mv      a3, a0
+    mv      a4, a1
+
+    # A valid returned path must end at:
+    #
+    # p = 0
+    # o = 0
+    or      t0, a0, a1
+    bnez    t0, validation_failed
+
+    # Search succeeded and returned path really solves the cube.
+    li      a0, 1
+    mv      a1, s0
+    li      a2, 1
+
+    j       validation_done
 
 
-solve_invalid:
+validation_failed:
+    li      a0, 0
+    mv      a1, s0
+    li      a2, 0
+
+    j       validation_done
+
+
+solve_failed:
+    li      a0, 0
+    li      a1, 0
+    li      a2, 0
+    li      a3, 0
+    li      a4, 0
+
+    j       validation_done
+
+
+input_invalid:
     li      a0, 0
     li      a1, -1
-    j       solve_done
+    li      a2, 0
+    li      a3, 0
+    li      a4, 0
+
+
+validation_done:
+    # Temporary Stage 4.6 Ripes inspection loop.
+    j       validation_done
 
 
 # ===========================================================================
@@ -88,7 +154,7 @@ parse_and_rank:
     # -----------------------------------------------------------------------
     # Parse permutation digits.
     #
-    # Input characters '1'..'7' are converted to internal values 0..6.
+    # ASCII '1'..'7' -> internal values 0..6.
     #
     # t5 is a 7-bit used-value mask for uniqueness checking.
     # -----------------------------------------------------------------------
@@ -116,7 +182,7 @@ parse_perm_loop:
     li      t6, 1
     sll     t6, t6, t3
 
-    # Duplicate?
+    # Duplicate permutation entry?
     and     t4, t5, t6
     bnez    t4, parse_invalid
 
@@ -163,11 +229,12 @@ parse_ori_loop:
 
 
 ori_sum_ok:
-    # Only first six orientations are included in rank.
+    # Only the first six orientations are included in the rank.
     li      t4, 6
     bgeu    t2, t4, ori_skip_rank
 
     # a1 = a1 * 3 + digit
+    #
     # x * 3 = (x << 1) + x
     slli    t4, a1, 1
     add     a1, t4, a1
@@ -182,16 +249,16 @@ ori_skip_rank:
 
 
 parse_ori_done:
-    # Exactly 14 characters?
+    # Require exactly 14 characters.
     lbu     t3, 0(t0)
     bnez    t3, parse_invalid
 
-    # Corner twist invariant.
+    # Corner-twist invariant.
     bnez    t5, parse_invalid
 
 
 # ---------------------------------------------------------------------------
-# Rank permutation with Lehmer code.
+# Rank permutation using Lehmer code.
 #
 # Mixed radix:
 #
@@ -210,6 +277,7 @@ parse_ori_done:
 
 
 rank_perm_outer:
+    # Only d0..d5 are needed.
     li      t6, 6
     bgeu    t2, t6, parse_success
 
@@ -218,7 +286,7 @@ rank_perm_outer:
     addi    t1, t0, 1
     li      t4, 0
 
-    # Entries to the right = 6 - i
+    # Number of entries to the right = 6 - i
     li      t5, 6
     sub     t5, t5, t2
 
@@ -244,23 +312,23 @@ rank_digit_done:
     # i = 0
     beqz    t2, rank_set_first
 
-    # i = 1 : * 6
+    # i = 1 -> *6
     li      t6, 1
     beq     t2, t6, rank_mul6
 
-    # i = 2 : * 5
+    # i = 2 -> *5
     li      t6, 2
     beq     t2, t6, rank_mul5
 
-    # i = 3 : * 4
+    # i = 3 -> *4
     li      t6, 3
     beq     t2, t6, rank_mul4
 
-    # i = 4 : * 3
+    # i = 4 -> *3
     li      t6, 4
     beq     t2, t6, rank_mul3
 
-    # i = 5 : * 2
+    # i = 5 -> *2
     slli    a0, a0, 1
     add     a0, a0, t4
 
@@ -269,6 +337,7 @@ rank_digit_done:
 
 rank_set_first:
     mv      a0, t4
+
     j       rank_next_digit
 
 
@@ -292,6 +361,7 @@ rank_mul5:
 
 
 rank_mul4:
+    # x * 4 = x << 2
     slli    a0, a0, 2
     add     a0, a0, t4
 
@@ -332,10 +402,8 @@ parse_invalid:
 # Output:
 #   a2 = max(perm_dist[p], ori_dist[o])
 #
-# a0 and a1 are preserved.
-#
-# This helper is retained from Stage 4.4 for now.
-# The Stage 4.5 search performs the lookup inline.
+# This helper remains from Stage 4.4.
+# Stage 4.5 IDA* performs its hot heuristic lookup inline.
 # ===========================================================================
 
 heuristic_lookup:
@@ -378,7 +446,7 @@ heuristic_use_perm:
 # Register usage:
 #
 #   s0  = current stack depth
-#   s1  = IDA* bound
+#   s1  = current IDA* bound
 #   s2  = ida_stack base
 #   s3  = solution base
 #   s4  = allowed_moves base
@@ -392,7 +460,7 @@ heuristic_use_perm:
 # ===========================================================================
 
 solve_ida:
-    # Save root state.
+    # Preserve root state.
     mv      s10, a0
     mv      s11, a1
 
@@ -437,17 +505,17 @@ ida_initial_perm:
 # ---------------------------------------------------------------------------
 
 ida_bound_loop:
-    # Diameter is 11.
+    # Maximum optimal distance is 11.
     li      t0, IDA_MAX_DEPTH
     bgtu    s1, t0, ida_fail
 
-    # Explicit stack pointer = depth 0.
+    # Explicit stack depth = 0.
     li      s0, 0
 
-    # frame[0].p = root_p
+    # frame[0].p
     sh      s10, 0(s2)
 
-    # frame[0].o = root_o
+    # frame[0].o
     sh      s11, 2(s2)
 
     # frame[0].prev_index = root
@@ -459,18 +527,14 @@ ida_bound_loop:
 
 
 # ---------------------------------------------------------------------------
-# Iterative DFS
+# Iterative DFS.
 # ---------------------------------------------------------------------------
 
 ida_search_loop:
 
-    # -----------------------------------------------------------------------
-    # frame = &ida_stack[sp]
+    # frame = &ida_stack[depth]
     #
-    # FRAME_SIZE = 6
-    #
-    # sp * 6 = sp * 4 + sp * 2
-    # -----------------------------------------------------------------------
+    # depth * 6 = (depth << 2) + (depth << 1)
 
     slli    t0, s0, 2
     slli    t1, s0, 1
@@ -483,36 +547,28 @@ ida_search_loop:
     lhu     t3, 2(t0)              # current o
 
 
-    # -----------------------------------------------------------------------
-    # Goal test.
-    #
-    # solved iff p == 0 && o == 0
-    # -----------------------------------------------------------------------
-
+    # Solved iff p == 0 and o == 0.
     or      t4, t2, t3
     beqz    t4, ida_success
 
 
-    # -----------------------------------------------------------------------
-    # Read frame enumeration state.
-    # -----------------------------------------------------------------------
-
+    # Current frame enumeration state.
     lbu     t4, 4(t0)              # prev_index
     lbu     t5, 5(t0)              # next_i
 
 
-    # count = allowed_count[prev_index]
+    # allowed_count[prev_index]
     add     t6, s5, t4
     lbu     t6, 0(t6)
 
-    # All legal children explored?
+    # Current frame exhausted?
     bgeu    t5, t6, ida_backtrack
 
 
     # -----------------------------------------------------------------------
     # entry = allowed_moves[prev_index][next_i]
     #
-    # Each row = 9 bytes.
+    # row stride = 9 bytes
     #
     # prev * 9 = (prev << 3) + prev
     # -----------------------------------------------------------------------
@@ -525,31 +581,31 @@ ida_search_loop:
     add     t6, t6, t5
     add     t6, s4, t6
 
-    lbu     a2, 0(t6)              # packed move entry
+    lbu     a2, 0(t6)
 
 
-    # low nibble = move number
+    # Low nibble = move.
     andi    a3, a2, 0x0f
 
-    # high nibble = next face
+    # High nibble = next face.
     srli    a4, a2, 4
 
 
     # -----------------------------------------------------------------------
     # next_p = perm_move[current_p][move]
     #
-    # Each state row:
+    # row stride:
     #
-    #   9 entries * 2 bytes = 18 bytes
+    # 9 entries * 2 bytes = 18 bytes
     #
-    # state * 18 = state * 16 + state * 2
+    # p * 18 = (p << 4) + (p << 1)
     # -----------------------------------------------------------------------
 
-    slli    a5, t2, 4              # p * 16
-    slli    a6, t2, 1              # p * 2
-    add     a5, a5, a6             # p * 18
+    slli    a5, t2, 4
+    slli    a6, t2, 1
+    add     a5, a5, a6
 
-    slli    a6, a3, 1              # move * 2
+    slli    a6, a3, 1
     add     a5, a5, a6
 
     add     a5, s6, a5
@@ -561,11 +617,11 @@ ida_search_loop:
     # next_o = ori_move[current_o][move]
     # -----------------------------------------------------------------------
 
-    slli    a6, t3, 4              # o * 16
-    slli    a7, t3, 1              # o * 2
-    add     a6, a6, a7             # o * 18
+    slli    a6, t3, 4
+    slli    a7, t3, 1
+    add     a6, a6, a7
 
-    slli    a7, a3, 1              # move * 2
+    slli    a7, a3, 1
     add     a6, a6, a7
 
     add     a6, s7, a6
@@ -573,10 +629,7 @@ ida_search_loop:
     lhu     a6, 0(a6)              # next_o
 
 
-    # -----------------------------------------------------------------------
-    # next_depth = current depth + 1
-    # -----------------------------------------------------------------------
-
+    # next_depth = depth + 1
     addi    a7, s0, 1
 
 
@@ -585,10 +638,10 @@ ida_search_loop:
     # -----------------------------------------------------------------------
 
     add     t4, s8, a5
-    lbu     t4, 0(t4)              # hp
+    lbu     t4, 0(t4)
 
     add     t5, s9, a6
-    lbu     t5, 0(t5)              # ho
+    lbu     t5, 0(t5)
 
     bgeu    t4, t5, ida_h_ready
 
@@ -596,38 +649,29 @@ ida_search_loop:
 
 
 ida_h_ready:
-
-    # -----------------------------------------------------------------------
     # Parent-side pruning.
     #
-    # Prune when next_depth + next_h exceeds the current bound.
-    # -----------------------------------------------------------------------
+    # Prune when:
+    #
+    # next_depth + next_h > bound
 
     add     t5, a7, t4
 
     bgtu    t5, s1, ida_search_loop
 
 
-    # -----------------------------------------------------------------------
-    # Store chosen move.
-    #
     # solution[current depth] = move
-    # -----------------------------------------------------------------------
-
     add     t4, s3, s0
     sb      a3, 0(t4)
 
 
-    # -----------------------------------------------------------------------
-    # Push child.
-    # -----------------------------------------------------------------------
-
+    # Push child frame.
     addi    s0, s0, 1
 
 
-    # child = &ida_stack[sp]
+    # child = &ida_stack[depth]
     #
-    # sp * 6 = (sp << 2) + (sp << 1)
+    # depth * 6 = (depth << 2) + (depth << 1)
 
     slli    t4, s0, 2
     slli    t5, s0, 1
@@ -651,7 +695,7 @@ ida_h_ready:
 
 
 # ---------------------------------------------------------------------------
-# Backtracking
+# Backtrack.
 # ---------------------------------------------------------------------------
 
 ida_backtrack:
@@ -665,7 +709,7 @@ ida_backtrack:
 
 
 # ---------------------------------------------------------------------------
-# No solution under the current bound.
+# No solution under current bound.
 # ---------------------------------------------------------------------------
 
 ida_bound_failed:
@@ -677,8 +721,7 @@ ida_bound_failed:
 # ---------------------------------------------------------------------------
 # Solution found.
 #
-# s0 is the depth of the solved frame, therefore also the solution length.
-# solution[0 .. s0-1] contains the moves.
+# s0 is the current depth and therefore the solution length.
 # ---------------------------------------------------------------------------
 
 ida_success:
@@ -694,6 +737,94 @@ ida_success:
 ida_fail:
     li      a0, 0
     li      a1, 0
+    ret
+
+
+# ===========================================================================
+# validate_solution
+#
+# Reapply the returned solution[] from the original root state.
+#
+# Input:
+#   a0 = root permutation rank
+#   a1 = root orientation rank
+#   a2 = solution length
+#
+# Output:
+#   a0 = final permutation rank
+#   a1 = final orientation rank
+#
+# A correct path must finish at:
+#
+#   a0 = 0
+#   a1 = 0
+# ===========================================================================
+
+validate_solution:
+    mv      t2, a0                 # current p
+    mv      t3, a1                 # current o
+
+    li      t0, 0                  # move index i
+    la      t1, solution
+
+    la      t4, perm_move
+    la      t5, ori_move
+
+
+validate_loop:
+    # All returned moves applied?
+    bgeu    t0, a2, validate_replay_done
+
+    # move = solution[i]
+    lbu     t6, 0(t1)
+
+
+    # -----------------------------------------------------------------------
+    # current_p = perm_move[current_p][move]
+    #
+    # state * 18 = (state << 4) + (state << 1)
+    # move  * 2  = move << 1
+    # -----------------------------------------------------------------------
+
+    slli    a3, t2, 4
+    slli    a4, t2, 1
+    add     a3, a3, a4
+
+    slli    a4, t6, 1
+    add     a3, a3, a4
+
+    add     a3, t4, a3
+
+    lhu     t2, 0(a3)
+
+
+    # -----------------------------------------------------------------------
+    # current_o = ori_move[current_o][move]
+    # -----------------------------------------------------------------------
+
+    slli    a3, t3, 4
+    slli    a4, t3, 1
+    add     a3, a3, a4
+
+    slli    a4, t6, 1
+    add     a3, a3, a4
+
+    add     a3, t5, a3
+
+    lhu     t3, 0(a3)
+
+
+    # Advance to next move.
+    addi    t0, t0, 1
+    addi    t1, t1, 1
+
+    j       validate_loop
+
+
+validate_replay_done:
+    mv      a0, t2
+    mv      a1, t3
+
     ret
 
 
@@ -748,7 +879,7 @@ allowed_moves:
     # Root
     .byte 0x00, 0x01, 0x02
     .byte 0x13, 0x14, 0x15
-    .byte 0, 0, 0
+    .byte 0x26, 0x27, 0x28
 
 
 allowed_count:
@@ -756,7 +887,7 @@ allowed_count:
 
 
 # ---------------------------------------------------------------------------
-# Host-precomputed search tables
+# Host-precomputed transition and heuristic tables
 # ---------------------------------------------------------------------------
 
     .include "tables_generated.inc"
@@ -773,7 +904,7 @@ allowed_count:
 # ---------------------------------------------------------------------------
 # Explicit IDA* stack
 #
-# 12 frames for depths 0..11.
+# 12 frames for depths 0 through 11.
 #
 # 12 * 6 = 72 bytes.
 # ---------------------------------------------------------------------------
@@ -783,9 +914,9 @@ ida_stack:
 
 
 # ---------------------------------------------------------------------------
-# Solution move buffer.
+# Returned optimal move sequence.
 #
-# Maximum optimal depth = 11.
+# Maximum length = 11.
 # ---------------------------------------------------------------------------
 
 solution:
