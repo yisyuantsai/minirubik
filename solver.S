@@ -5,7 +5,7 @@
     # ida_frame_t:
     #   +0 : uint16_t p
     #   +2 : uint16_t o
-    #   +4 : uint8_t  prev_index
+    #   +4 : uint8_t  move_row_offset
     #   +5 : uint8_t  next_i
     .equ FRAME_SIZE,     6
 
@@ -41,14 +41,14 @@ _start:
     # Preserve solution length.
     mv      s0, a1
 
-    # Replay the returned solution starting from the original root state.
+    # Replay the returned solution from the original root state.
     mv      a0, s10
     mv      a1, s11
     mv      a2, s0
 
     jal     ra, validate_solution
 
-    # Keep final replayed state visible for Ripes inspection.
+    # Preserve final state for inspection.
     mv      a3, a0
     mv      a4, a1
 
@@ -56,10 +56,10 @@ _start:
     or      t0, a0, a1
     bnez    t0, validation_failed
 
-    # Successful result.
+    # Successful result:
     #
     # a0 = 1
-    # a1 = optimal solution length
+    # a1 = solution length
     # a2 = validation success
     # a3 = final permutation rank
     # a4 = final orientation rank
@@ -97,7 +97,7 @@ validation_failed:
 
 
 validation_done:
-    # Ripes exit ecall.
+    # Ripes exit.
     li      a7, 10
     ecall
 
@@ -193,11 +193,13 @@ parse_ori_loop:
 
 
 ori_sum_ok:
-    # Only the first six orientations are explicitly ranked.
+    # Only first six orientations contribute to orientation rank.
     li      t4, 6
     bgeu    t2, t4, ori_skip_rank
 
     # a1 = a1 * 3 + digit
+    #
+    # x * 3 = (x << 1) + x
     slli    t4, a1, 1
     add     a1, t4, a1
     add     a1, a1, t3
@@ -376,7 +378,7 @@ parse_invalid:
 #   s2  = current explicit-stack frame pointer
 #   s3  = solution base
 #   s4  = allowed_moves base
-#   s5  = allowed_count base
+#   s5  = allowed-move sentinel (0xff)
 #   s6  = perm_move base
 #   s7  = ori_move base
 #   s8  = perm_dist base
@@ -390,11 +392,11 @@ solve_ida:
     mv      s10, a0
     mv      s11, a1
 
-    # Load static table addresses once.
+    # Load static addresses/constants once.
     la      s3, solution
 
     la      s4, allowed_moves
-    la      s5, allowed_count
+    li      s5, 0xff
 
     la      s6, perm_move
     la      s7, ori_move
@@ -433,7 +435,7 @@ ida_bound_loop:
     li      t0, IDA_MAX_DEPTH
     bgtu    s1, t0, ida_fail
 
-    # Reset depth and current frame pointer to the root frame.
+    # Reset depth and current frame pointer.
     li      s0, 0
     la      s2, ida_stack
 
@@ -441,8 +443,8 @@ ida_bound_loop:
     sh      s10, 0(s2)
     sh      s11, 2(s2)
 
-    # prev_index = 3 means root.
-    li      t0, 3
+    # Root move row starts at byte offset 48 = 3 * 16.
+    li      t0, 48
     sb      t0, 4(s2)
 
     # next_i = 0.
@@ -450,17 +452,9 @@ ida_bound_loop:
 
 
 # ---------------------------------------------------------------------------
-# Iterative DFS
+# Iterative DFS.
 #
-# 4.8.2 refinement:
-#
-# s2 always points directly at the current frame.
-#
-# The previous implementation recomputed:
-#
-#   ida_stack + depth * 6
-#
-# on every iteration using two shifts and two adds.
+# s2 always points directly to the current frame.
 # ---------------------------------------------------------------------------
 
 ida_search_loop:
@@ -470,65 +464,69 @@ ida_search_loop:
     lhu     t3, 2(s2)              # current o
 
 
+    # -----------------------------------------------------------------------
     # Goal test.
     #
     # Solved iff p == 0 and o == 0.
+    # -----------------------------------------------------------------------
+
     or      t4, t2, t3
     beqz    t4, ida_success
 
 
-    # Enumeration state.
-    lbu     t4, 4(s2)              # prev_index
+    # -----------------------------------------------------------------------
+    # Allowed-move enumeration.
+    #
+    # frame +4 stores the byte offset of the current 16-byte move row:
+    #
+    #    0 = previous R
+    #   16 = previous B
+    #   32 = previous D
+    #   48 = root
+    #
+    # Each row ends with 0xff.
+    # -----------------------------------------------------------------------
+
+    lbu     t4, 4(s2)              # row byte offset
     lbu     t5, 5(s2)              # next_i
 
-
-    # count = allowed_count[prev_index]
-    add     t6, s5, t4
-    lbu     t6, 0(t6)
-
-    # All legal children explored?
-    bgeu    t5, t6, ida_backtrack
-
-
-    # -----------------------------------------------------------------------
-    # entry = allowed_moves[prev_index][next_i]
-    #
-    # Row size = 9.
-    # prev * 9 = (prev << 3) + prev.
-    # -----------------------------------------------------------------------
-
-    addi    t6, t5, 1
-    sb      t6, 5(s2)              # next_i++
-
-    slli    t6, t4, 3
-    add     t6, t6, t4
+    # entry = allowed_moves[row_offset + next_i]
+    add     t6, s4, t4
     add     t6, t6, t5
-    add     t6, s4, t6
+    lbu     a2, 0(t6)
 
-    lbu     a2, 0(t6)              # packed move entry
+    # Sentinel means all children have been explored.
+    beq     a2, s5, ida_backtrack
+
+    # next_i++
+    addi    t6, t5, 1
+    sb      t6, 5(s2)
 
     # Low nibble = move number.
     andi    a3, a2, 0x0f
 
-    # High nibble = next face.
+    # High nibble = next face index.
     srli    a4, a2, 4
+
+    # Convert face index 0/1/2 directly into row offset 0/16/32.
+    slli    a4, a4, 4
 
 
     # -----------------------------------------------------------------------
     # next_p = perm_move[current_p][move]
     #
-    # Each row is 9 uint16_t entries:
+    # Each transition row contains:
     #
-    #   9 * 2 = 18 bytes
+    #   9 uint16_t = 18 bytes
     #
     # state * 18 = state * 16 + state * 2
     # -----------------------------------------------------------------------
 
-    slli    a5, t2, 4
-    slli    a6, t2, 1
-    add     a5, a5, a6
+    slli    a5, t2, 4              # p * 16
+    slli    a6, t2, 1              # p * 2
+    add     a5, a5, a6             # p * 18
 
-    slli    a6, a3, 1
+    slli    a6, a3, 1              # move * 2
     add     a5, a5, a6
 
     add     a5, s6, a5
@@ -540,11 +538,11 @@ ida_search_loop:
     # next_o = ori_move[current_o][move]
     # -----------------------------------------------------------------------
 
-    slli    a6, t3, 4
-    slli    a7, t3, 1
-    add     a6, a6, a7
+    slli    a6, t3, 4              # o * 16
+    slli    a7, t3, 1              # o * 2
+    add     a6, a6, a7             # o * 18
 
-    slli    a7, a3, 1
+    slli    a7, a3, 1              # move * 2
     add     a6, a6, a7
 
     add     a6, s7, a6
@@ -573,18 +571,20 @@ ida_search_loop:
 
 ida_h_ready:
 
+    # -----------------------------------------------------------------------
     # Parent-side pruning.
     #
     # Reject child when:
     #
     #   next_depth + h > bound
-    #
+    # -----------------------------------------------------------------------
+
     add     t5, a7, t4
     bgtu    t5, s1, ida_search_loop
 
 
     # -----------------------------------------------------------------------
-    # Store the chosen move.
+    # Store chosen move.
     #
     # solution[current_depth] = move
     # -----------------------------------------------------------------------
@@ -596,9 +596,7 @@ ida_h_ready:
     # -----------------------------------------------------------------------
     # Push child.
     #
-    # Since s2 points at the current frame, pushing only requires:
-    #
-    #   s2 += FRAME_SIZE
+    # s2 directly tracks the current frame.
     # -----------------------------------------------------------------------
 
     addi    s0, s0, 1
@@ -606,14 +604,14 @@ ida_h_ready:
 
     sh      a5, 0(s2)              # child p
     sh      a6, 2(s2)              # child o
-    sb      a4, 4(s2)              # child prev_index
+    sb      a4, 4(s2)              # child's move-row offset
     sb      zero, 5(s2)            # child next_i
 
     j       ida_search_loop
 
 
 # ---------------------------------------------------------------------------
-# Backtracking
+# Backtracking.
 # ---------------------------------------------------------------------------
 
 ida_backtrack:
@@ -628,7 +626,7 @@ ida_backtrack:
 
 
 # ---------------------------------------------------------------------------
-# No solution under the current bound.
+# No solution under current bound.
 # ---------------------------------------------------------------------------
 
 ida_bound_failed:
@@ -640,7 +638,7 @@ ida_bound_failed:
 # ---------------------------------------------------------------------------
 # Solution found.
 #
-# s0 equals the depth of the solved frame and therefore the solution length.
+# s0 is the solved depth and therefore the optimal solution length.
 # ---------------------------------------------------------------------------
 
 ida_success:
@@ -662,8 +660,7 @@ ida_fail:
 # ===========================================================================
 # validate_solution
 #
-# Replay solution[] from the original root state using the same precomputed
-# transition tables used by IDA*.
+# Replay solution[] from the original root state using the transition tables.
 #
 # Input:
 #   a0 = root permutation rank
@@ -674,7 +671,8 @@ ida_fail:
 #   a0 = final permutation rank
 #   a1 = final orientation rank
 #
-# Correct solver output must return:
+# Correct solver output must finish at:
+#
 #   a0 = 0
 #   a1 = 0
 # ===========================================================================
@@ -757,44 +755,79 @@ input_state:
 # ---------------------------------------------------------------------------
 # Allowed move enumeration
 #
-# Packed byte:
+# Every row is exactly 16 bytes.
+#
+# Packed valid entry:
 #
 #   high nibble = next face index
 #   low nibble  = move index
 #
-# Face indices:
+# 0xff marks the end of valid moves in each row.
 #
-#   0 = R
-#   1 = B
-#   2 = D
-#   3 = root
+# Row offsets:
+#
+#    0 = previous R
+#   16 = previous B
+#   32 = previous D
+#   48 = root
 # ---------------------------------------------------------------------------
 
 allowed_moves:
 
-    # Previous face = R.
+    # -----------------------------------------------------------------------
+    # Previous face = R
+    #
+    # Legal next faces:
+    #   B, D
+    #
+    # 6 valid moves + sentinel + 9 padding = 16 bytes
+    # -----------------------------------------------------------------------
+
     .byte 0x13, 0x14, 0x15
     .byte 0x26, 0x27, 0x28
-    .byte 0, 0, 0
+    .byte 0xff
+    .byte 0, 0, 0, 0, 0, 0, 0, 0, 0
 
-    # Previous face = B.
+
+    # -----------------------------------------------------------------------
+    # Previous face = B
+    #
+    # Legal next faces:
+    #   R, D
+    # -----------------------------------------------------------------------
+
     .byte 0x00, 0x01, 0x02
     .byte 0x26, 0x27, 0x28
-    .byte 0, 0, 0
+    .byte 0xff
+    .byte 0, 0, 0, 0, 0, 0, 0, 0, 0
 
-    # Previous face = D.
+
+    # -----------------------------------------------------------------------
+    # Previous face = D
+    #
+    # Legal next faces:
+    #   R, B
+    # -----------------------------------------------------------------------
+
     .byte 0x00, 0x01, 0x02
     .byte 0x13, 0x14, 0x15
-    .byte 0, 0, 0
+    .byte 0xff
+    .byte 0, 0, 0, 0, 0, 0, 0, 0, 0
 
-    # Root.
+
+    # -----------------------------------------------------------------------
+    # Root
+    #
+    # All nine moves are legal.
+    #
+    # 9 valid moves + sentinel + 6 padding = 16 bytes
+    # -----------------------------------------------------------------------
+
     .byte 0x00, 0x01, 0x02
     .byte 0x13, 0x14, 0x15
     .byte 0x26, 0x27, 0x28
-
-
-allowed_count:
-    .byte 6, 6, 6, 9
+    .byte 0xff
+    .byte 0, 0, 0, 0, 0, 0
 
 
 # ---------------------------------------------------------------------------
@@ -825,7 +858,7 @@ ida_stack:
 
 
 # ---------------------------------------------------------------------------
-# Solution move buffer
+# Solution buffer.
 #
 # Maximum optimal depth = 11.
 # ---------------------------------------------------------------------------
@@ -835,7 +868,7 @@ solution:
 
 
 # ---------------------------------------------------------------------------
-# Temporary parsed permutation
+# Temporary parsed permutation.
 # ---------------------------------------------------------------------------
 
 state_p:
