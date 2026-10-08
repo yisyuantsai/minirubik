@@ -392,40 +392,6 @@ parse_invalid:
 
 
 # ===========================================================================
-# heuristic_lookup
-#
-# Input:
-#   a0 = permutation rank
-#   a1 = orientation rank
-#
-# Output:
-#   a2 = max(perm_dist[p], ori_dist[o])
-#
-# This helper remains from Stage 4.4.
-# Stage 4.5 IDA* performs its hot heuristic lookup inline.
-# ===========================================================================
-
-heuristic_lookup:
-    la      t0, perm_dist
-    add     t0, t0, a0
-    lbu     t1, 0(t0)
-
-    la      t2, ori_dist
-    add     t2, t2, a1
-    lbu     t3, 0(t2)
-
-    bgeu    t1, t3, heuristic_use_perm
-
-    mv      a2, t3
-    ret
-
-
-heuristic_use_perm:
-    mv      a2, t1
-    ret
-
-
-# ===========================================================================
 # solve_ida
 #
 # Iterative IDA* using an explicit fixed-size stack.
