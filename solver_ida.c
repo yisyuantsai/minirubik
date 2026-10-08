@@ -233,6 +233,7 @@ static void pack_heuristics(void)
                 (uint8_t)(ori_dist[o] & 0x0F);
     }
 }
+
 static uint8_t packed_get(const uint8_t *table, uint16_t index)
 {
     uint8_t value = table[index >> 1];
@@ -242,6 +243,7 @@ static uint8_t packed_get(const uint8_t *table, uint16_t index)
 
     return (uint8_t)(value & 0x0F);
 }
+
 static int validate_packed_heuristics(void)
 {
     for (uint16_t p = 0; p < PERMUTATIONS; ++p) {
@@ -283,6 +285,7 @@ static int validate_heuristics(uint8_t *perm_max, uint8_t *ori_max)
 
     return 1;
 }
+
 static uint8_t heuristic(uint16_t p, uint16_t o)
 {
     uint8_t hp = perm_dist[p];
@@ -380,6 +383,7 @@ static int solve_ida(uint16_t p,
 
     return 0;
 }
+
 static uint8_t exact_distance(state_t state, const uint8_t *table)
 {
     uint8_t distance = 0;
@@ -395,6 +399,7 @@ static uint8_t exact_distance(state_t state, const uint8_t *table)
 
     return distance;
 }
+
 static uint8_t exact_distance_rank(uint32_t rank, const uint8_t *table)
 {
     uint8_t distance = 0;
